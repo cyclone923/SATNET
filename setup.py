@@ -22,7 +22,7 @@ ext_modules = [
             'src/satnet.cpp',
             'src/satnet_cpu.cpp',
         ],
-        extra_compile_args = ['-fopenmp', '-msse4.1', '-Wall', '-g']
+        extra_compile_args = ['-Xpreprocessor', '-fopenmp', '-msse4.1', '-Wall', '-g']
     )
 ]
 
