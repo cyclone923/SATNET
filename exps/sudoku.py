@@ -26,7 +26,7 @@ class SudokuSolver(nn.Module):
     def __init__(self, boardSz, aux, m):
         super(SudokuSolver, self).__init__()
         n = boardSz**6
-        self.sat = satnet.SATNet(n, m, aux)
+        self.sat = satnet.SATNet(n, m, aux, max_iter=100, eps=1e-6)
 
     def forward(self, y_in, mask):
         out = self.sat(y_in, mask)
@@ -128,7 +128,7 @@ def main():
     parser.add_argument('--testBatchSz', type=int, default=40)
     parser.add_argument('--aux', type=int, default=300)
     parser.add_argument('--m', type=int, default=600)
-    parser.add_argument('--nEpoch', type=int, default=100)
+    parser.add_argument('--nEpoch', type=int, default=50)
     parser.add_argument('--testPct', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=2e-3)
     parser.add_argument('--save', type=str)
@@ -153,10 +153,12 @@ def main():
     save = 'sudoku{}{}.boardSz{}-aux{}-m{}-lr{}-bsz{}'.format(
             '.perm' if args.perm else '', '.mnist' if args.mnist else '',
             args.boardSz, args.aux, args.m, args.lr, args.batchSz)
-    if args.save: save = '{}-{}'.format(args.save, save)
+    if args.save:
+        save = '{}-{}'.format(args.save, save)
     save = os.path.join('logs', save)
-    if os.path.isdir(save): shutil.rmtree(save)
-    os.makedirs(save)
+    # if os.path.isdir(save):
+    #     shutil.rmtree(save)
+    os.makedirs(save, exist_ok=True)
 
     #setproctitle.setproctitle('sudoku.{}'.format(save))
 
@@ -180,7 +182,8 @@ def main():
     print_header('Forming inputs')
     X, Ximg, Y, is_input = process_inputs(X_in, Ximg_in, Y_in, args.boardSz)
     data = Ximg if args.mnist else X
-    if args.cuda: data, is_input, Y = data.cuda(), is_input.cuda(), Y.cuda()
+    if args.cuda:
+        data, is_input, Y = data.cuda(), is_input.cuda(), Y.cuda()
 
     unperm = None
     if args.perm and not args.mnist:
@@ -197,7 +200,8 @@ def main():
     else:
         model = SudokuSolver(args.boardSz, args.aux, args.m)
 
-    if args.cuda: model = model.cuda()
+    if args.cuda:
+        model = model.cuda()
 
     if args.mnist:
         optimizer = optim.Adam([
@@ -220,10 +224,11 @@ def main():
     for epoch in range(1, args.nEpoch+1):
         train(args.boardSz, epoch, model, optimizer, train_logger, train_set, args.batchSz, unperm)
         test(args.boardSz, epoch, model, optimizer, test_logger, test_set, args.testBatchSz, unperm)
-        #torch.save(model.state_dict(), os.path.join(save, 'it'+str(epoch)+'.pth'))
+        torch.save(model.state_dict(), os.path.join(save, 'it'+str(epoch)+'.pth'))
 
 def process_inputs(X, Ximg, Y, boardSz):
     is_input = X.sum(dim=3, keepdim=True).expand_as(X).int().sign()
+    # to_soduku(X[1], Y[1], is_input[1])
 
     Ximg = Ximg.flatten(start_dim=1, end_dim=2)
     Ximg = Ximg.unsqueeze(2).float()
@@ -234,6 +239,18 @@ def process_inputs(X, Ximg, Y, boardSz):
 
     return X, Ximg, Y, is_input
 
+# def to_soduku(X, Y, is_input):
+#     assert isinstance(X, torch.Tensor)
+#     assert isinstance(Y, torch.Tensor)
+#     assert X.size() == (9,9,9)
+#     assert Y.size() == (9,9,9)
+#     soduku_X = X.argmax(dim=2)
+#     soduku_Y = Y.argmax(dim=2)
+#     print(soduku_X)
+#     print(soduku_Y)
+#     print(is_input)
+#     return
+
 def run(boardSz, epoch, model, optimizer, logger, dataset, batchSz, to_train=False, unperm=None):
 
     loss_final, err_final = 0, 0
@@ -242,7 +259,8 @@ def run(boardSz, epoch, model, optimizer, logger, dataset, batchSz, to_train=Fal
     tloader = tqdm(enumerate(loader), total=len(loader))
 
     for i,(data,is_input,label) in tloader:
-        if to_train: optimizer.zero_grad()
+        if to_train:
+            optimizer.zero_grad()
         preds = model(data.contiguous(), is_input.contiguous())
         loss = nn.functional.binary_cross_entropy(preds, label)
 

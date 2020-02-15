@@ -32,10 +32,11 @@ def main():
     parser.add_argument('--testPct', type=float, default=0.1)
     parser.add_argument('--batchSz', type=int, default=100)
     parser.add_argument('--testBatchSz', type=int, default=500)
-    parser.add_argument('--nEpoch', type=int, default=100)
+    parser.add_argument('--nEpoch', type=int, default=20)
     parser.add_argument('--lr', type=float, default=1e-1)
     parser.add_argument('--seq', type=int, default=20)
     parser.add_argument('--save', type=str)
+    parser.add_argument('--model', type=str)
     parser.add_argument('--m', type=int, default=4)
     parser.add_argument('--aux', type=int, default=4)
     parser.add_argument('--no_cuda', action='store_true')
@@ -59,8 +60,8 @@ def main():
 
     if args.save: save = '{}-{}'.format(args.save, save)
     save = os.path.join('logs', save)
-    if os.path.isdir(save): shutil.rmtree(save)
-    os.makedirs(save)
+    # if os.path.isdir(save): shutil.rmtree(save)
+    os.makedirs(save, exist_ok=True)
 
     L = args.seq
 
@@ -94,6 +95,11 @@ def main():
     else:
         optimizer = optim.SGD(model.parameters(), lr=args.lr)
 
+    if args.model:
+        state_dict = torch.load(args.model)
+        model.load_state_dict(state_dict)
+
+
     train_logger = CSVLogger(os.path.join(save, 'train.csv'))
     test_logger = CSVLogger(os.path.join(save, 'test.csv'))
     fields = ['epoch', 'loss', 'err']
@@ -104,6 +110,7 @@ def main():
     for epoch in range(1, args.nEpoch+1):
         train(epoch, model, optimizer, train_logger, train_set, args.batchSz)
         test(epoch, model, optimizer, test_logger, test_set, args.testBatchSz)
+        torch.save(model.state_dict(), os.path.join(save, 'it'+str(epoch)+'.pth'))
 
 def apply_seq(net, zeros, batch_data, batch_is_inputs, batch_targets):
     y = torch.cat([batch_data[:,:2], zeros], dim=1)
@@ -124,7 +131,7 @@ def run(epoch, model, optimizer, logger, dataset, batchSz, to_train):
     start = torch.zeros(batchSz, 1)
     if next(model.parameters()).is_cuda: start = start.cuda()
 
-    for i,(data,is_input, label) in tloader:
+    for i,(data, is_input, label) in tloader:
         if to_train: optimizer.zero_grad()
 
         loss, pred = apply_seq(model, start, data, is_input, label)
