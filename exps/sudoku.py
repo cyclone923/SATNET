@@ -21,7 +21,6 @@ from torch.utils.data import TensorDataset, DataLoader
 from tqdm.auto import tqdm
 
 import satnet
-from collections import defaultdict
 
 class SudokuSolver(nn.Module):
     def __init__(self, boardSz, aux, m):
@@ -30,8 +29,59 @@ class SudokuSolver(nn.Module):
         self.sat = satnet.SATNet(n, m, aux, max_iter=100, eps=1e-6)
 
     def forward(self, y_in, mask):
-        out = self.sat(y_in, mask)
+        out = y_in
+        n = 0
+        while True:
+            flag = map(lambda x: torch.is_nonzero(x), mask.flatten())
+            if sum(flag) == 0:
+                break
+            out = self.sat(out, mask)
+            confident_out = torch.mul(torch.logical_not(mask), torch.abs(0.5 - out))
+            confident_k = torch.topk(confident_out, k=100, dim=1)
+            mask = torch.scatter(mask, dim=1, index=confident_k.indices, value=0)
+            n += 1
+        print(n)
+        # out = self.sat(y_in, mask)
         return out
+
+class DigitConv(nn.Module):
+    '''
+    Convolutional neural network for MNIST digit recognition. From:
+    https://github.com/pytorch/examples/blob/master/mnist/main.py
+    '''
+    def __init__(self):
+        super(DigitConv, self).__init__()
+        self.conv1 = nn.Conv2d(1, 20, 5, 1)
+        self.conv2 = nn.Conv2d(20, 50, 5, 1)
+        self.fc1 = nn.Linear(4*4*50, 500)
+        self.fc2 = nn.Linear(500, 10)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.max_pool2d(x, 2, 2)
+        x = F.relu(self.conv2(x))
+        x = F.max_pool2d(x, 2, 2)
+        x = x.view(-1, 4*4*50)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return F.softmax(x, dim=1)[:,:9].contiguous()
+
+class MNISTSudokuSolver(nn.Module):
+    def __init__(self, boardSz, aux, m):
+        super(MNISTSudokuSolver, self).__init__()
+        self.digit_convnet = DigitConv()
+        self.sudoku_solver = SudokuSolver(boardSz, aux, m)
+        self.boardSz = boardSz
+        self.nSq = boardSz**2
+    
+    def forward(self, x, is_inputs):
+        nBatch = x.shape[0]
+        x = x.flatten(start_dim = 0, end_dim = 1)
+        digit_guess = self.digit_convnet(x)
+        puzzles = digit_guess.view(nBatch, self.nSq * self.nSq * self.nSq)
+
+        solution = self.sudoku_solver(puzzles, is_inputs)
+        return solution
 
 class CSVLogger(object):
     def __init__(self, fname):
@@ -41,6 +91,37 @@ class CSVLogger(object):
     def log(self, fields):
         self.logger.writerow(fields)
         self.f.flush()
+
+class FigLogger(object):
+    def __init__(self, fig, base_ax, title):
+        self.colors = ['tab:red', 'tab:blue']
+        self.labels = ['Loss (entropy)', 'Error']
+        self.markers = ['d', '.']
+        self.axes = [base_ax, base_ax.twinx()]
+        base_ax.set_xlabel('Epochs')
+        base_ax.set_title(title)
+        
+        for i, ax in enumerate(self.axes):
+            ax.set_ylabel(self.labels[i], color=self.colors[i])
+            ax.tick_params(axis='y', labelcolor=self.colors[i])
+
+        self.reset()
+        self.fig = fig
+        
+    def log(self, args):
+        for i, arg in enumerate(args[-2:]):
+            self.curves[i].append(arg)
+            x = list(range(len(self.curves[i])))
+            self.axes[i].plot(x, self.curves[i], self.colors[i], marker=self.markers[i])
+            self.axes[i].set_ylim(0, 1.05)
+            
+        self.fig.canvas.draw()
+        
+    def reset(self):
+        for ax in self.axes:
+            for line in ax.lines:
+                line.remove()
+        self.curves = [[], []]
 
 def print_header(msg):
     print('===>', msg)
@@ -53,13 +134,13 @@ def find_unperm(perm):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_dir', type=str, default='sudoku31to42_hard')
+    parser.add_argument('--data_dir', type=str, default='sudoku')
     parser.add_argument('--boardSz', type=int, default=3)
     parser.add_argument('--batchSz', type=int, default=40)
     parser.add_argument('--testBatchSz', type=int, default=40)
-    parser.add_argument('--aux', type=int, default=500)
-    parser.add_argument('--m', type=int, default=1000)
-    parser.add_argument('--nEpoch', type=int, default=1000)
+    parser.add_argument('--aux', type=int, default=300)
+    parser.add_argument('--m', type=int, default=600)
+    parser.add_argument('--nEpoch', type=int, default=50)
     parser.add_argument('--testPct', type=float, default=0.1)
     parser.add_argument('--lr', type=float, default=2e-3)
     parser.add_argument('--save', type=str)
@@ -81,8 +162,8 @@ def main():
         torch.backends.cudnn.benchmark = False
         torch.cuda.init()
 
-    save = '{}{}{}.boardSz{}-aux{}-m{}-lr{}-bsz{}'.format(
-            args.data_dir, '.perm' if args.perm else '', '.mnist' if args.mnist else '',
+    save = 'sudoku{}{}.boardSz{}-aux{}-m{}-lr{}-bsz{}'.format(
+            '.perm' if args.perm else '', '.mnist' if args.mnist else '',
             args.boardSz, args.aux, args.m, args.lr, args.batchSz)
     if args.save:
         save = '{}-{}'.format(args.save, save)
@@ -97,11 +178,12 @@ def main():
 
     with open(os.path.join(args.data_dir, 'features.pt'), 'rb') as f:
         X_in = torch.load(f)
+    with open(os.path.join(args.data_dir, 'features_img.pt'), 'rb') as f:
+        Ximg_in = torch.load(f)
     with open(os.path.join(args.data_dir, 'labels.pt'), 'rb') as f:
         Y_in = torch.load(f)
     with open(os.path.join(args.data_dir, 'perm.pt'), 'rb') as f:
         perm = torch.load(f)
-
 
     N = X_in.size(0)
     nTrain = int(N*(1.-args.testPct))
@@ -110,9 +192,8 @@ def main():
     assert(nTest % args.testBatchSz == 0)
 
     print_header('Forming inputs')
-    X, Y, is_input = process_inputs(X_in, Y_in, args.boardSz)
-
-    data = X
+    X, Ximg, Y, is_input = process_inputs(X_in, Ximg_in, Y_in, args.boardSz)
+    data = Ximg if args.mnist else X
     if args.cuda:
         data, is_input, Y = data.cuda(), is_input.cuda(), Y.cuda()
 
@@ -126,8 +207,10 @@ def main():
     test_set =  TensorDataset(data[nTrain:], is_input[nTrain:], Y[nTrain:])
 
     print_header('Building model')
-
-    model = SudokuSolver(args.boardSz, args.aux, args.m)
+    if args.mnist:
+        model = MNISTSudokuSolver(args.boardSz, args.aux, args.m)
+    else:
+        model = SudokuSolver(args.boardSz, args.aux, args.m)
 
     if args.cuda:
         model = model.cuda()
@@ -141,7 +224,6 @@ def main():
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     if args.model:
-        print(args.model + " loaded")
         model.load_state_dict(torch.load(args.model))
 
     train_logger = CSVLogger(os.path.join(save, 'train.csv'))
@@ -156,39 +238,36 @@ def main():
         test(args.boardSz, epoch, model, optimizer, test_logger, test_set, args.testBatchSz, unperm)
         torch.save(model.state_dict(), os.path.join(save, 'it'+str(epoch)+'.pth'))
 
-def process_inputs(X, Y, boardSz):
+def process_inputs(X, Ximg, Y, boardSz):
     is_input = X.sum(dim=3, keepdim=True).expand_as(X).int().sign()
-    all_info = defaultdict(lambda : 0)
-    for i in range(10000):
-        n = int(to_soduku(X[i], Y[i], is_input[i]))
-        all_info[n] += 1
-    print(all_info)
+    # to_soduku(X[1], Y[1], is_input[1])
+
+    Ximg = Ximg.flatten(start_dim=1, end_dim=2)
+    Ximg = Ximg.unsqueeze(2).float()
 
     X      = X.view(X.size(0), -1)
     Y      = Y.view(Y.size(0), -1)
     is_input = is_input.view(is_input.size(0), -1)
 
-    return X, Y, is_input
+    return X, Ximg, Y, is_input
 
-def to_soduku(X, Y, is_input):
-    # assert isinstance(X, torch.Tensor)
-    # assert isinstance(Y, torch.Tensor)
-    # assert X.size() == (9,9,9)
-    # assert Y.size() == (9,9,9)
-    # soduku_X = X.argmax(dim=2)
-    # soduku_Y = Y.argmax(dim=2)
-    # print(soduku_X+1)
-    # print(soduku_Y+1)
-    # print(is_input.permute(2,1,0)[0] * (soduku_Y+1))
-    # exit(0)
-
-    return torch.sum(is_input.permute(2,1,0)[0])
+# def to_soduku(X, Y, is_input):
+#     assert isinstance(X, torch.Tensor)
+#     assert isinstance(Y, torch.Tensor)
+#     assert X.size() == (9,9,9)
+#     assert Y.size() == (9,9,9)
+#     soduku_X = X.argmax(dim=2)
+#     soduku_Y = Y.argmax(dim=2)
+#     print(soduku_X)
+#     print(soduku_Y)
+#     print(is_input)
+#     return
 
 def run(boardSz, epoch, model, optimizer, logger, dataset, batchSz, to_train=False, unperm=None):
 
     loss_final, err_final = 0, 0
 
-    loader = DataLoader(dataset, batch_size=batchSz, shuffle=True)
+    loader = DataLoader(dataset, batch_size=batchSz)
     tloader = tqdm(enumerate(loader), total=len(loader))
 
     for i,(data,is_input,label) in tloader:
