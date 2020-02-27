@@ -88,8 +88,8 @@ def main():
     parser.add_argument('--seed', type=int, default=20)
     parser.add_argument('--data_dir', type=str, default='nqueens')
     parser.add_argument('--nQueens', type=int, default=7)
-    parser.add_argument('--batchSz', type=int, default=8)
-    parser.add_argument('--testBatchSz', type=int, default=8)
+    parser.add_argument('--batchSz', type=int, default=163)
+    parser.add_argument('--testBatchSz', type=int, default=163)
     parser.add_argument('--aux', type=int, default=0)
     parser.add_argument('--m', type=int, default=12)
     parser.add_argument('--nEpoch', type=int, default=2000)
@@ -137,9 +137,6 @@ def main():
     perm = torch.randperm(N)
     X_in, Y_in, is_input = torch.flatten(X_in[perm], start_dim=1), torch.flatten(Y_in[perm], start_dim=1), torch.flatten(is_input[perm], start_dim=1)
 
-
-    X_in, Y_in, is_input = X_in[:13000], Y_in[:13000], is_input[:13000]
-    N = X_in.size(0)
     nTrain = int(N*(1.-args.testPct))
     nTest = N-nTrain
     assert(nTrain % args.batchSz == 0)
@@ -179,6 +176,7 @@ def main():
 
     test(0, model, optimizer, test_logger, test_set, args.testBatchSz)
     for epoch in range(1, args.nEpoch+1):
+        print(f"Epoch{epoch}")
         train(epoch, model, optimizer, train_logger, train_set, args.batchSz)
         test(epoch, model, optimizer, test_logger, train_set, args.testBatchSz)
         test(epoch, model, optimizer, test_logger, test_set, args.testBatchSz)
