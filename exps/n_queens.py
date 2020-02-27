@@ -43,37 +43,6 @@ class CSVLogger(object):
         self.logger.writerow(fields)
         self.f.flush()
 
-class FigLogger(object):
-    def __init__(self, fig, base_ax, title):
-        self.colors = ['tab:red', 'tab:blue']
-        self.labels = ['Loss (entropy)', 'Error']
-        self.markers = ['d', '.']
-        self.axes = [base_ax, base_ax.twinx()]
-        base_ax.set_xlabel('Epochs')
-        base_ax.set_title(title)
-        
-        for i, ax in enumerate(self.axes):
-            ax.set_ylabel(self.labels[i], color=self.colors[i])
-            ax.tick_params(axis='y', labelcolor=self.colors[i])
-
-        self.reset()
-        self.fig = fig
-        
-    def log(self, args):
-        for i, arg in enumerate(args[-2:]):
-            self.curves[i].append(arg)
-            x = list(range(len(self.curves[i])))
-            self.axes[i].plot(x, self.curves[i], self.colors[i], marker=self.markers[i])
-            self.axes[i].set_ylim(0, 1.05)
-            
-        self.fig.canvas.draw()
-        
-    def reset(self):
-        for ax in self.axes:
-            for line in ax.lines:
-                line.remove()
-        self.curves = [[], []]
-
 def print_header(msg):
     print('===>', msg)
 
@@ -87,18 +56,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=20)
     parser.add_argument('--data_dir', type=str, default='nqueens')
-    parser.add_argument('--nQueens', type=int, default=7)
-    parser.add_argument('--batchSz', type=int, default=8)
-    parser.add_argument('--testBatchSz', type=int, default=8)
-    parser.add_argument('--aux', type=int, default=0)
-    parser.add_argument('--m', type=int, default=12)
-    parser.add_argument('--nEpoch', type=int, default=2000)
-    parser.add_argument('--testPct', type=float, default=0.2)
-    parser.add_argument('--lr', type=float, default=8e-4)
+    parser.add_argument('--nQueens', type=int, default=12)
+    parser.add_argument('--batchSz', type=int, default=10650 // 2)
+    parser.add_argument('--testBatchSz', type=int, default=3550 // 2)
+    parser.add_argument('--aux', type=int, default=144)
+    parser.add_argument('--m', type=int, default=256)
+    parser.add_argument('--nEpoch', type=int, default=200000)
+    parser.add_argument('--testPct', type=float, default=0.25)
+    parser.add_argument('--lr', type=float, default=2e-3)
     parser.add_argument('--save', type=str)
     parser.add_argument('--model', type=str)
     parser.add_argument('--no_cuda', action='store_true')
-
     args = parser.parse_args()
 
     # For debugging: fix the random seed
@@ -112,7 +80,7 @@ def main():
         torch.backends.cudnn.benchmark = False
         torch.cuda.init()
 
-    save = 'nqueens{}-aux{}-m{}-lr{}-bsz{}'.format(args.nQueens, args.aux, args.nQueens, args.m, args.lr, args.batchSz)
+    save = 'nqueens{}-aux{}-m{}-lr{}-bsz{}'.format(args.nQueens, args.aux, args.m, args.lr, args.batchSz)
     if args.save:
         save = '{}-{}'.format(args.save, save)
     save = os.path.join('logs', save)
@@ -130,6 +98,11 @@ def main():
         Y_in = torch.load(f)
     with open(os.path.join(os.path.join(args.data_dir, str(args.nQueens)), 'is_input.pt'), 'rb') as f:
         is_input = torch.load(f)
+    print(is_input[0])
+    exit(0)
+    # print(Y_in[0])
+    # print(is_input[0])
+    # exit(0)
 
     print_header('Forming inputs')
     N = X_in.size(0)
@@ -138,24 +111,16 @@ def main():
     X_in, Y_in, is_input = torch.flatten(X_in[perm], start_dim=1), torch.flatten(Y_in[perm], start_dim=1), torch.flatten(is_input[perm], start_dim=1)
 
 
-    X_in, Y_in, is_input = X_in[:13000], Y_in[:13000], is_input[:13000]
-    N = X_in.size(0)
     nTrain = int(N*(1.-args.testPct))
     nTest = N-nTrain
     assert(nTrain % args.batchSz == 0)
     assert(nTest % args.testBatchSz == 0)
-
-
 
     if args.cuda:
         X_in, is_input, Y_in = X_in.cuda(), is_input.cuda(), Y_in.cuda()
 
     print(X_in.size())
     print(Y_in.size())
-
-    # for i in X_in:
-    #     print(i)
-    # exit(0)
 
     train_set = TensorDataset(X_in[:nTrain], is_input[:nTrain], Y_in[:nTrain])
     test_set =  TensorDataset(X_in[nTrain:], is_input[nTrain:], Y_in[nTrain:])
@@ -177,18 +142,17 @@ def main():
     train_logger.log(fields)
     test_logger.log(fields)
 
-    test(0, model, optimizer, test_logger, test_set, args.testBatchSz)
+    # test(0, model, optimizer, test_logger, test_set, args.testBatchSz)
     for epoch in range(1, args.nEpoch+1):
+        print(f"Eproch{epoch}")
         train(epoch, model, optimizer, train_logger, train_set, args.batchSz)
         test(epoch, model, optimizer, test_logger, train_set, args.testBatchSz)
         test(epoch, model, optimizer, test_logger, test_set, args.testBatchSz)
-
         # torch.save(model.state_dict(), os.path.join(save, 'it'+str(epoch)+'.pth'))
-
 
 def run(epoch, model, optimizer, logger, dataset, batchSz, to_train=False):
     loss_final, err_final = 0, 0
-    loader = DataLoader(dataset, batch_size=batchSz)
+    loader = DataLoader(dataset, batch_size=batchSz, shuffle=True)
     # tloader = tqdm(enumerate(loader), total=len(loader))
 
     for i,(data,is_input,label) in enumerate(loader):
@@ -196,8 +160,6 @@ def run(epoch, model, optimizer, logger, dataset, batchSz, to_train=False):
             optimizer.zero_grad()
         preds = model(data.contiguous(), is_input.contiguous())
         loss = nn.functional.binary_cross_entropy(preds, label)
-        # print(preds)
-        # print(label)
 
         if to_train:
             loss.backward()
