@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import os
 
-def plance_queen(n, pre):
+def place_queen(n, pre):
     if len(pre) == n:
         return [pre]
     else:
