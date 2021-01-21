@@ -5,7 +5,7 @@ import random
 
 random.seed(0)
 
-def plance_queen(n, pre):
+def place_queen(n, pre):
     if len(pre) == n:
         return [pre]
     else:
